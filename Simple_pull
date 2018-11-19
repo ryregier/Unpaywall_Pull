@@ -1,0 +1,189 @@
+email = "rregier@uoguelph.ca" #Email needed by unpaywall api
+
+import urllib.request, urllib.parse, urllib.error
+import json
+import ssl
+import re
+import csv
+from datetime import datetime
+import os
+from multiprocessing import Pool
+
+doi_data = list()
+
+doi_list = list() #DOI list to append found dois
+Dcount = 0 #Count for DOIs to keep track of how many there are
+broken_doi = list() #Count for how many publications don't have DOIs or have broken DOIs
+blank_doi = 0 #Count for blank DOIs
+
+serviceurl = 'https://api.unpaywall.org/v2/' #API link for unpaywall
+
+def grab(x): #returning values and returning "unknown" if value error
+    if x is False or x == " " or x == "" or x == "No Information" or x is None:
+        return "unknown"
+    else:
+        try:
+            return x
+        except:
+            return "unknown"
+
+def get_data(doi): #Function to pull all data - in json - from unpaywall for that DOI
+    try:
+        unpaywallurl = serviceurl + urllib.parse.quote(doi) + "?email=" + email
+        #print('Retrieving', url)
+        uh = urllib.request.urlopen(unpaywallurl)
+        data = uh.read().decode()
+        info = json.loads(data)
+        #print (info['is_oa'])
+        #x = info['is_oa']
+        #doi_status.append(x)
+        return info
+    except:
+        #print ("broken DOI")
+        x = "broken"
+        #doi_status.append(x)
+        return x
+
+while True: #opening csv file DOI list
+        filename = input("Please file name of the DOI csv list. Make sure it is located in same folder as this python program:\n")
+        #filename = "DOIlisttest"
+        if len(filename) < 1:
+            quit()
+        try:
+            csv_data = open(filename,encoding="ISO-8859-1") #Saving csv file as csv_data
+            break
+        except:
+            print ("Can't find the file")
+            continue
+
+for item in csv_data: #Loop to pull DOIs from csv file
+        word = item.rstrip()
+        word = word.split(",")
+        if len(word[0]) > 1: Dcount = Dcount + 1 #Finding all first columns longer that one character and counting those as a DOI
+        if Dcount == 1:continue #Skipping first Line which is a heading
+        if len(word[0]) < 1: #Counting how many DOIs are missing
+            word[0] = "No DOI listed"
+            blank_doi = blank_doi + 1 #Counting blank DOIS
+        doi_list.append(word[0]) #adding DOIs to a DOI list
+
+print (len(doi_list)-blank_doi,"DOIs found. This should take about 1 minute per 1000 DOIs depending on speed of your computer")
+
+count = 0 #Count for how many DOIs have been processed
+
+for doi in doi_list: #Giving updates how much longer to go by comparing counts to the number of DOIs
+    if count == int(len(doi_list)*0.25):
+        print ("25% processed....")
+    if count == int(len(doi_list)*0.50):
+        print ("50% processed...")
+    if count == int(len(doi_list)*0.75):
+        print ("75% processed...")
+    count = count + 1
+
+    if doi == "No DOI listed": #keeping track of blank DOIs
+        doi_dict = {
+            "DOI":"No DOI listed",
+            "Document Type":"",
+            "Journal":"",
+            "Publisher":"",
+            "Year":"",
+            "Published OA":0,
+            "Hybrid OA": 0,
+            "Bronze OA": 0,
+            "Self-Archived OA Count": 0,
+            "Link":unpaywallurl
+            }
+        doi_data.append(doi_dict)
+        continue
+
+    try: #Trying to pull from unpaywall API for the list DOI
+        unpaywallurl = serviceurl + urllib.parse.quote(doi) + "?email=" + email
+        #print('Retrieving', url)
+        uh = urllib.request.urlopen(unpaywallurl)
+        data = uh.read().decode()
+        info = json.loads(data)
+
+    except:
+        #print ("URL Retrieving error")
+        broken_doi.append(doi)
+        doi_dict = { #returning blank info if DOI can't be found
+            "DOI":doi,
+            "Document Type":"DOI Error",
+            "Journal":"",
+            "Publisher":"",
+            "Year":"",
+            "Published OA":0,
+            "Hybrid OA": 0,
+            "Bronze OA": 0,
+            "Self-Archived OA Count": 0,
+            "Link":unpaywallurl
+            }
+        doi_data.append(doi_dict)
+        continue
+
+    doi_dict = { #returning blank info if DOI can't be found
+            "DOI":doi,
+            "Document Type":info['genre'],
+            "Journal":info['journal_name'],
+            "Publisher":info['publisher'],
+            "Year":info['year'],
+            "Published OA":0,
+            "Hybrid OA": 0,
+            "Bronze OA": 0,
+            "Self-Archived OA Count": 0,
+            "Link":unpaywallurl
+            }
+
+
+    if info['is_oa'] == True:
+        gold = False #having a marker for Gold, because if it's gold it can't be hybrid or bronze
+        hybrid = False
+        green = 0
+
+        if info['journal_is_in_doaj'] == True or info["journal_is_oa"] == True: #it's gold if it's in DOAJ or journal is oa
+            doi_dict["Published OA"] = 1
+            gold = True #If its gold it can't be Hybrid or Bronze
+            #print (doi_dict["Published OA"])
+
+        for x in info['oa_locations']: #Looping through OA locations to find OA statuses
+            #print(x)
+            #print(count)
+            #print(x['license'])
+            #if gold == False and info['oa_locations']["host_type"]=="publisher" and info['oa_locations']['license'][0:2] == "cc":
+            #if gold == False and x["host_type"]=="publisher" and x['license'][0:2] == "cc":
+            #    doi_dict["Hybrid OA"] = 1
+                #print (doi_dict["Hybrid OA"])
+            #    hybrid = True #If it is gold it can't be bronze
+            #if gold == False and hybrid == False and x["host_type"]=="publisher" and x['license'][0:2] != "cc":
+            #        doi_dict["Bronze OA"] = 1
+            #if x['host_type']=="repository":
+            #    green = green + 1
+            #    doi_dict["Self-Archived OA Count"] = green
+
+            if gold == False and x["host_type"]=="publisher":
+                try:
+                    if x['license'][0:2] == "cc": #If OA with publisher and has license must be Hybrid
+                        doi_dict["Hybrid OA"] = 1
+                    else:
+                        doi_dict["Bronze OA"] = 1 #If OA with publisher and doesn't have license must be bronze
+                except:
+                    doi_dict["Bronze OA"] = 1 #If OA with publisher and license is null must be bronze
+            if x['host_type']=="repository": #If OA with a repository, must be green
+                green = green + 1
+                doi_dict["Self-Archived OA Count"] = green
+
+
+    doi_data.append(doi_dict)
+
+csv_name = "UNPAYWALL PULL - "+filename
+
+myFile = open(csv_name,'w',newline='')
+with myFile:
+    writer = csv.writer(myFile)
+    writer.writerow(['DOI', 'Document Type', 'Journal', 'Publisher', 'Year', 'Published OA', "Hybrid OA", "Bronze OA", "Self-Archived OA Count","Link"])
+    for a in doi_data:
+        data2 = [a["DOI"], a["Document Type"], a["Journal"], a["Publisher"], a["Year"], a["Published OA"], a["Hybrid OA"], a["Bronze OA"], a['Self-Archived OA Count'], a["Link"]]
+        writer.writerow(data2)
+
+print ("There were",len(broken_doi),"DOI errors")
+print (csv_name,"exported with the data.")
+os.startfile(csv_name)
